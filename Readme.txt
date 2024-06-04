@@ -1,0 +1,1 @@
+This script will insert data, fetch data, and fetch dat according to the specific queries.
