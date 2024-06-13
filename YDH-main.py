@@ -22,7 +22,6 @@ class ChannelDetails(Base):
     Channel_Subscribers = Column(Integer)
     __table_args__ = (UniqueConstraint('Channel_ID', name='uix_1'),)
 
-
 class VideoDetails(Base):
     __tablename__ = 'video_details'
     Video_Id = Column(String, primary_key=True)
@@ -40,7 +39,6 @@ class VideoDetails(Base):
     Caption_Status = Column(String)
     __table_args__ = (UniqueConstraint('Video_Id', name='uix_2'),)
 
-
 class CommentDetails(Base):
     __tablename__ = 'comment_details'
     Comment_Id = Column(String, primary_key=True)
@@ -51,7 +49,6 @@ class CommentDetails(Base):
     Like_Count = Column(Integer)
     Reply_Count = Column(Integer)
     __table_args__ = (UniqueConstraint('Comment_Id', name='uix_3'),)
-
 
 def fetch_channel_data(channel_id):
     request = youtube.channels().list(
@@ -72,7 +69,6 @@ def fetch_channel_data(channel_id):
         channel_details.append(data)
     return channel_details
 
-
 def get_uploads_playlist_id(channel_id):
     request = youtube.channels().list(
         part="contentDetails",
@@ -81,7 +77,6 @@ def get_uploads_playlist_id(channel_id):
     response = request.execute()
     uploads_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
     return uploads_playlist_id
-
 
 def get_all_video_ids(playlist_id):
     video_ids = []
@@ -96,7 +91,6 @@ def get_all_video_ids(playlist_id):
             video_ids.append(item['contentDetails']['videoId'])
         request = youtube.playlistItems().list_next(request, response)
     return video_ids
-
 
 def get_video_details(video_ids):
     video_details = []
@@ -123,7 +117,6 @@ def get_video_details(video_ids):
                 'Caption_Status': item['contentDetails']['caption']
             })
     return video_details
-
 
 def get_comment_details(video_ids):
     comment_details = []
@@ -154,7 +147,6 @@ def get_comment_details(video_ids):
                 raise
     return comment_details
 
-
 def insert_to_postgres(df, table, session):
     if table == ChannelDetails:
         for index, row in df.iterrows():
@@ -173,10 +165,14 @@ def insert_to_postgres(df, table, session):
                 session.add(CommentDetails(**row))
     session.commit()
 
-
 def fetch_and_insert_data(channel_id, engine):
     Session = sessionmaker(bind=engine)
     session = Session()
+
+    # Check if the channel already exists
+    exists = session.query(ChannelDetails).filter_by(Channel_ID=channel_id).first()
+    if exists:
+        return None, None, None, True
 
     channel_info = fetch_channel_data(channel_id)
     channel_df = pd.DataFrame(channel_info)
@@ -192,7 +188,7 @@ def fetch_and_insert_data(channel_id, engine):
     insert_to_postgres(channel_df, ChannelDetails, session)
     insert_to_postgres(video_df, VideoDetails, session)
     insert_to_postgres(comment_df, CommentDetails, session)
-    return channel_df, video_df, comment_df
+    return channel_df, video_df, comment_df, False
 
 def main():
     st.sidebar.title("Navigation")
@@ -213,13 +209,16 @@ def main():
 
         if st.button("Insert Data"):
             if channel_id:
-                channel_df, video_df, comment_df = fetch_and_insert_data(channel_id, engine)
-                st.subheader("Channel Data")
-                st.dataframe(channel_df)
-                st.subheader("Video Data")
-                st.dataframe(video_df)
-                st.subheader("Comment Data")
-                st.dataframe(comment_df)
+                channel_df, video_df, comment_df, exists = fetch_and_insert_data(channel_id, engine)
+                if exists:
+                    st.warning("This YouTube channel details already exist in the database.")
+                else:
+                    st.subheader("Channel Data")
+                    st.dataframe(channel_df)
+                    st.subheader("Video Data")
+                    st.dataframe(video_df)
+                    st.subheader("Comment Data")
+                    st.dataframe(comment_df)
             else:
                 st.error("Please enter a YouTube Channel ID")
     elif selection == "View Data":
@@ -237,10 +236,10 @@ def main():
                 video_data = pd.read_sql(session.query(VideoDetails).statement, session.bind)
                 comment_data = pd.read_sql(session.query(CommentDetails).statement, session.bind)
             else:
-                selected_channel_id = session.query(ChannelDetails).filter_by(Channel_Name=selected_channel).first().Channel_ID
-                channel_data = pd.read_sql(session.query(ChannelDetails).filter_by(Channel_ID=selected_channel_id).statement, session.bind)
-                video_data = pd.read_sql(session.query(VideoDetails).join(ChannelDetails).filter(ChannelDetails.Channel_Name == selected_channel).statement, session.bind)
-                comment_data = pd.read_sql(session.query(CommentDetails).join(VideoDetails).join(ChannelDetails).filter(ChannelDetails.Channel_Name == selected_channel).statement, session.bind)
+                channel_id = session.query(ChannelDetails).filter_by(Channel_Name=selected_channel).first().Channel_ID
+                channel_data = pd.read_sql(session.query(ChannelDetails).filter_by(Channel_ID=channel_id).statement, session.bind)
+                video_data = pd.read_sql(session.query(VideoDetails).filter_by(Channel_Id=channel_id).statement, session.bind)
+                comment_data = pd.read_sql(session.query(CommentDetails).join(VideoDetails, VideoDetails.Video_Id == CommentDetails.Video_Id).filter(VideoDetails.Channel_Id == channel_id).statement, session.bind)
 
             st.subheader("Channel Data")
             st.dataframe(channel_data)
